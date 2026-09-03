@@ -1,6 +1,6 @@
 # Checkpoint 3 - Serverless Order Processing Workflow
 
-Projeto desenvolvido para o **Checkpoint 3** da disciplina de **Serverless Computing e Arquiteturas Event-Driven**.
+Projeto desenvolvido para o Checkpoint 3 da disciplina de **Serverless Computing e Arquiteturas Event-Driven**.
 
 O projeto evolui uma aplicação serverless de processamento de pedidos para uma arquitetura orquestrada utilizando **AWS Lambda, AWS Step Functions, Amazon DynamoDB e Amazon SQS**.
 
@@ -32,21 +32,21 @@ AWS Step Functions
 OrderCompleted
 ```
 
-Em caso de falha:
+### Tratamento de falhas
 
 ```text
 Lambda Task
-    |
-    +--> Retry
-    |
-    +--> Catch
-          |
-          v
-       Amazon SQS
-       orders-dlq
-          |
-          v
-       OrderFailed
+   |
+   +--> Retry
+   |
+   +--> Catch
+         |
+         v
+      Amazon SQS
+      orders-dlq
+         |
+         v
+      OrderFailed
 ```
 
 ## Tecnologias
@@ -58,6 +58,7 @@ Lambda Task
 * AWS IAM
 * Python 3.12
 * pytest
+* Git/GitHub
 
 ## Estrutura do projeto
 
@@ -76,6 +77,8 @@ cloud-serverless-checkpoint3/
 │   └── test_lambdas.py
 ├── workflow/
 │   └── order-processing-workflow.json
+├── process-response.json
+├── process-response-duplicate.json
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -85,7 +88,7 @@ cloud-serverless-checkpoint3/
 
 ### 1. StartOrder
 
-A Lambda `start-order` recebe um pedido através de uma Function URL HTTP e inicia uma execução do AWS Step Functions.
+A Lambda `start-order` recebe um pedido através de uma **Lambda Function URL** HTTP e inicia uma execução do AWS Step Functions.
 
 Exemplo de entrada:
 
@@ -97,7 +100,7 @@ Exemplo de entrada:
 }
 ```
 
-A função retorna HTTP `202` e o ARN da execução do Step Functions.
+A função inicia a execução do workflow e retorna HTTP `202` juntamente com o ARN da execução do Step Functions.
 
 ### 2. ValidateOrder
 
@@ -112,7 +115,7 @@ Pedidos inválidos geram uma exceção e são direcionados para o tratamento de 
 
 ### 3. ProcessOrder
 
-A Lambda `process-order` realiza o processamento do pedido e utiliza o Amazon DynamoDB para garantir **idempotência**.
+A Lambda `process-order` realiza o processamento do pedido e utiliza o **Amazon DynamoDB** para garantir idempotência.
 
 A tabela utilizada é:
 
@@ -125,6 +128,8 @@ A chave de partição é:
 ```text
 order_id
 ```
+
+Quando um pedido é processado pela primeira vez, seu `order_id` é registrado no DynamoDB.
 
 Quando o mesmo `order_id` é processado novamente, a função identifica o pedido como duplicado e não realiza um novo processamento.
 
@@ -176,6 +181,8 @@ Cada etapa recebe a saída da etapa anterior, permitindo que o processamento sej
 
 Em caso de erro, o workflow utiliza `Catch` para direcionar a execução para o fluxo de tratamento de falhas.
 
+O fluxo de falha utiliza a etapa `SendToDLQ`, responsável pelo envio da mensagem para a fila SQS `orders-dlq`.
+
 ## Retry
 
 As tarefas Lambda do Step Functions possuem política de retry para erros transitórios da infraestrutura AWS.
@@ -194,11 +201,11 @@ MaxAttempts: 3
 BackoffRate: 2
 ```
 
-Erros de validação, como um valor negativo para `amount`, não são tratados como erros transitórios e seguem diretamente para o fluxo de falha.
+Erros de validação, como um valor negativo para `amount`, não são tratados como erros transitórios e seguem para o fluxo de falha.
 
 ## Dead-Letter Queue
 
-O workflow possui tratamento de falhas utilizando Amazon SQS.
+O workflow possui tratamento de falhas utilizando **Amazon SQS**.
 
 Quando uma tarefa falha e não consegue ser concluída após as tentativas configuradas, o `Catch` direciona a execução para a etapa `SendToDLQ`.
 
@@ -229,14 +236,26 @@ Exemplo:
 
 ```text
 Primeira execução:
-ORDER-003
+ORDER-001
 processed = true
 duplicate = false
 
 Segunda execução:
-ORDER-003
+ORDER-001
 processed = false
 duplicate = true
+```
+
+O resultado da segunda execução é registrado em:
+
+```text
+process-response-duplicate.json
+```
+
+O resultado de processamento normal é registrado em:
+
+```text
+process-response.json
 ```
 
 Dessa forma, o mesmo pedido não é processado novamente.
@@ -280,10 +299,23 @@ Instale as dependências:
 pip install -r requirements.txt
 ```
 
+Caso o ambiente ainda não possua o pytest instalado:
+
+```bash
+pip install pytest
+```
+
 Execute os testes:
 
 ```bash
-pytest -q
+python -m pytest -q
+```
+
+Resultado obtido durante a validação do projeto:
+
+```text
+......... [100%]
+9 passed in 0.04s
 ```
 
 Os testes verificam:
@@ -294,29 +326,41 @@ Os testes verificam:
 * tratamento de pedidos duplicados;
 * estrutura e configurações principais do workflow.
 
-## Testes realizados na AWS
+## Validação na AWS
 
-Além dos testes unitários locais, o fluxo foi validado diretamente na AWS.
+Além dos testes unitários locais, o fluxo foi validado diretamente no ambiente AWS.
 
-### Execução normal
+### Teste da Function URL
 
-Foi enviado o seguinte pedido:
+A entrada HTTP foi enviada para a Function URL da Lambda `start-order`.
+
+Exemplo:
 
 ```json
 {
-  "order_id": "ORDER-003",
+  "order_id": "ORDER-001",
   "customer": "Rafaella",
-  "amount": 150
+  "amount": 100
 }
 ```
 
-Resultado:
+A Function URL recebeu corretamente a requisição e iniciou uma execução do AWS Step Functions.
 
-```text
-SUCCEEDED
+A resposta obtida foi no formato:
+
+```json
+{
+  "message": "Pedido enviado para processamento",
+  "executionArn": "arn:aws:states:...",
+  "startDate": "2026-09-03T04:17:05.337000+00:00"
+}
 ```
 
-A execução percorreu corretamente as etapas:
+A URL pública da Function URL não é publicada neste README.
+
+### Teste de processamento
+
+Foi validado o processamento de pedidos através do workflow do Step Functions, seguindo as etapas:
 
 ```text
 ValidateOrder
@@ -328,56 +372,44 @@ FinishOrder
 OrderCompleted
 ```
 
+O processamento utiliza o DynamoDB para controle de idempotência.
+
 ### Teste de idempotência
 
-O mesmo pedido `ORDER-003` foi enviado novamente.
+Foi validado o comportamento de duplicidade utilizando o mesmo `order_id`.
 
-Resultado:
-
-```json
-{
-  "processed": false,
-  "duplicate": true
-}
-```
-
-A execução foi concluída com sucesso sem realizar o processamento novamente.
-
-### Teste da Dead-Letter Queue
-
-Foi enviado um pedido inválido:
-
-```json
-{
-  "order_id": "ORDER-004",
-  "customer": "Rafaella",
-  "amount": -10
-}
-```
-
-O workflow terminou com:
+Na primeira execução:
 
 ```text
-FAILED
+processed = true
+duplicate = false
 ```
 
-A mensagem contendo os dados do pedido e o erro de validação foi enviada para a fila:
+Em uma nova execução utilizando o mesmo `order_id`:
 
 ```text
-orders-dlq
+processed = false
+duplicate = true
 ```
 
-### Teste da Function URL
+O segundo processamento é identificado como duplicado e não realiza novamente o processamento do pedido.
 
-A entrada HTTP foi validada utilizando a Function URL da Lambda `start-order`.
+Os resultados utilizados como evidência estão nos arquivos:
 
-O endpoint recebeu o pedido e iniciou corretamente uma execução do AWS Step Functions.
+```text
+process-response.json
+process-response-duplicate.json
+```
 
-A URL da Function URL não é publicada neste README. Ela deve ser informada separadamente no campo de comentários/texto da entrega.
+### Teste de validação
+
+Também foi validado o tratamento de pedidos inválidos, incluindo pedidos com valor (`amount`) menor ou igual a zero.
+
+Quando a validação falha, a exceção é propagada para o workflow e o mecanismo de `Catch` direciona o processamento para o fluxo de falha.
 
 ## Recursos AWS utilizados
 
-Região:
+**Região:**
 
 ```text
 us-east-1
@@ -416,16 +448,19 @@ Roles específicas para:
 
 O projeto implementa uma arquitetura serverless orquestrada para processamento de pedidos, contemplando os principais requisitos do Checkpoint 3:
 
-* **Orquestração** através do AWS Step Functions;
-* **Funções serverless** utilizando AWS Lambda;
-* **Idempotência** utilizando Amazon DynamoDB;
-* **Retry** para erros transitórios;
-* **Tratamento de falhas** utilizando `Catch`;
-* **Dead-Letter Queue** utilizando Amazon SQS;
-* **Controle de acesso** utilizando AWS IAM;
-* **Entrada HTTP** através de Lambda Function URL;
-* **Testes locais** utilizando pytest.
+* Orquestração através do AWS Step Functions;
+* Funções serverless utilizando AWS Lambda;
+* Idempotência utilizando Amazon DynamoDB;
+* Retry para erros transitórios;
+* Tratamento de falhas utilizando `Catch`;
+* Dead-Letter Queue utilizando Amazon SQS;
+* Controle de acesso utilizando AWS IAM;
+* Entrada HTTP através de Lambda Function URL;
+* Testes automatizados utilizando pytest;
+* Organização do código em funções independentes;
+* Evidências de processamento normal e duplicado.
 
 ## Autor
 
-Rafaella Machado
+**Rafaella Machado**
+
