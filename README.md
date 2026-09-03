@@ -356,7 +356,7 @@ A URL pública da Function URL não é publicada neste README.
 
 ### Teste de processamento
 
-Foi validado o processamento de pedidos através do workflow do Step Functions, seguindo as etapas:
+O processamento do pedido foi validado através do workflow do Step Functions, seguindo as etapas:
 
 ```text
 ValidateOrder
@@ -459,5 +459,3 @@ O projeto implementa uma arquitetura serverless orquestrada para processamento d
 ## Autor
 
 **Rafaella Machado**
-
-
