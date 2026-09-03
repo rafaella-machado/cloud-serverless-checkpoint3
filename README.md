@@ -42,6 +42,9 @@ Lambda Task
    +--> Catch
          |
          v
+      SendToDLQ
+         |
+         v
       Amazon SQS
       orders-dlq
          |
@@ -246,13 +249,13 @@ processed = false
 duplicate = true
 ```
 
-O resultado da segunda execução é registrado em:
+O resultado da segunda execução está registrado em:
 
 ```text
 process-response-duplicate.json
 ```
 
-O resultado de processamento normal é registrado em:
+O resultado de processamento normal está registrado em:
 
 ```text
 process-response.json
@@ -282,7 +285,6 @@ A URL pública da Function URL não é armazenada neste repositório.
 * AWS CLI configurado
 * Python 3.12+
 * Git
-* pytest
 
 ## Execução dos testes locais
 
@@ -297,12 +299,6 @@ Instale as dependências:
 
 ```bash
 pip install -r requirements.txt
-```
-
-Caso o ambiente ainda não possua o pytest instalado:
-
-```bash
-pip install pytest
 ```
 
 Execute os testes:
@@ -463,4 +459,5 @@ O projeto implementa uma arquitetura serverless orquestrada para processamento d
 ## Autor
 
 **Rafaella Machado**
+
 
