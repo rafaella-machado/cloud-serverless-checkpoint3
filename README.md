@@ -1,254 +1,431 @@
-# Checkpoint 2 - Arquitetura Serverless Orientada a Eventos
+# Checkpoint 3 - Serverless Order Processing Workflow
 
-## Descrição
+Projeto desenvolvido para o **Checkpoint 3** da disciplina de **Serverless Computing e Arquiteturas Event-Driven**.
 
-Este projeto corresponde ao Checkpoint 2 da disciplina de Cloud, Serverless e IA.
-
-O objetivo é evoluir uma função serverless HTTP simples para uma arquitetura orientada a eventos (Event-Driven).
-
-Nesta implementação, uma mensagem publicada em um tópico Amazon SNS dispara automaticamente uma função AWS Lambda. A função recebe o evento, extrai a mensagem e o tópico de origem e registra essas informações no Amazon CloudWatch Logs.
-
-A solução utiliza uma arquitetura serverless orientada a eventos, permitindo o desacoplamento entre o produtor da mensagem e o processamento do evento.
-
-## Provedor Utilizado
-
-- AWS (Amazon Web Services)
-- AWS Lambda
-- Amazon SNS (Simple Notification Service)
-- Amazon CloudWatch Logs
-- AWS IAM
-- AWS CloudShell
+O projeto evolui uma aplicação serverless de processamento de pedidos para uma arquitetura orquestrada utilizando **AWS Lambda, AWS Step Functions, Amazon DynamoDB e Amazon SQS**.
 
 ## Arquitetura
 
-A arquitetura implementada segue o fluxo:
-
+```text
+HTTP POST
+   |
+   v
+Function URL
+   |
+   v
+StartOrder Lambda
+   |
+   v
+AWS Step Functions
+   |
+   +--> ValidateOrder Lambda
+   |
+   +--> ProcessOrder Lambda
+   |        |
+   |        v
+   |    DynamoDB
+   |    Idempotency
+   |
+   +--> FinishOrder Lambda
+   |
+   v
+OrderCompleted
 ```
-Amazon SNS Topic (orders)
-        |
-        v
-AWS Lambda (checkpoint2-sns-orders)
-        |
-        v
-Amazon CloudWatch Logs
+
+Em caso de falha:
+
+```text
+Lambda Task
+    |
+    +--> Retry
+    |
+    +--> Catch
+          |
+          v
+       Amazon SQS
+       orders-dlq
+          |
+          v
+       OrderFailed
 ```
 
-O tópico SNS funciona como produtor do evento.
+## Tecnologias
 
-Quando uma nova mensagem é publicada no tópico `orders`, o Amazon SNS aciona automaticamente a função Lambda `checkpoint2-sns-orders`.
+* AWS Lambda
+* AWS Step Functions
+* Amazon DynamoDB
+* Amazon SQS
+* AWS IAM
+* Python 3.12
+* pytest
 
-A Lambda processa o evento recebido, extrai a mensagem e identifica o tópico de origem. Essas informações são registradas no Amazon CloudWatch Logs.
+## Estrutura do projeto
 
-## Estrutura do Projeto
-
-```
-cloud-serverless-checkpoint2/
-├── lambda_function.py
-├── test_lambda.py
-├── requirements.txt
+```text
+cloud-serverless-checkpoint3/
+├── lambdas/
+│   ├── start_order/
+│   │   └── lambda_function.py
+│   ├── validate_order/
+│   │   └── lambda_function.py
+│   ├── process_order/
+│   │   └── lambda_function.py
+│   └── finish_order/
+│       └── lambda_function.py
+├── tests/
+│   └── test_lambdas.py
+├── workflow/
+│   └── order-processing-workflow.json
+├── .gitignore
 ├── README.md
-└── .gitignore
+└── requirements.txt
 ```
 
-## Pré-requisitos
+## Fluxo de processamento
 
-Para executar o projeto localmente, é necessário possuir:
+### 1. StartOrder
 
-- Python 3 instalado
-- Git instalado
-- Terminal de comandos
+A Lambda `start-order` recebe um pedido através de uma Function URL HTTP e inicia uma execução do AWS Step Functions.
 
-Para realizar os testes e utilizar os recursos na AWS, é necessário possuir:
+Exemplo de entrada:
 
-- Uma conta AWS
-- AWS CLI configurado
-- Permissões adequadas para acessar AWS Lambda, Amazon SNS e Amazon CloudWatch
-
-## Como Rodar Localmente
-
-### 1. Clonar o repositório
-
-Clone o repositório público do GitHub:
-
-```bash
-git clone https://github.com/rafaella-machado/cloud-serverless-checkpoint2.git
+```json
+{
+  "order_id": "ORDER-001",
+  "customer": "Rafaella",
+  "amount": 100
+}
 ```
 
-### 2. Entrar na pasta do projeto
+A função retorna HTTP `202` e o ARN da execução do Step Functions.
 
-```bash
-cd cloud-serverless-checkpoint2
+### 2. ValidateOrder
+
+A Lambda `validate-order` valida os dados básicos do pedido:
+
+* `order_id`
+* `customer`
+* `amount`
+* `amount` maior que zero
+
+Pedidos inválidos geram uma exceção e são direcionados para o tratamento de falhas do workflow.
+
+### 3. ProcessOrder
+
+A Lambda `process-order` realiza o processamento do pedido e utiliza o Amazon DynamoDB para garantir **idempotência**.
+
+A tabela utilizada é:
+
+```text
+orders-idempotency
 ```
 
-### 3. Verificar os arquivos do projeto
+A chave de partição é:
 
-A estrutura esperada é:
-
-```
-cloud-serverless-checkpoint2/
-├── lambda_function.py
-├── test_lambda.py
-├── requirements.txt
-├── README.md
-└── .gitignore
+```text
+order_id
 ```
 
-### 4. Executar o teste local
+Quando o mesmo `order_id` é processado novamente, a função identifica o pedido como duplicado e não realiza um novo processamento.
 
-Execute:
+Exemplo de resultado para um pedido duplicado:
 
-```bash
-python3 test_lambda.py
+```json
+{
+  "processed": false,
+  "duplicate": true,
+  "order_id": "ORDER-001",
+  "message": "Pedido já processado"
+}
 ```
 
-O arquivo `test_lambda.py` simula localmente um evento enviado pelo Amazon SNS para a função Lambda.
+### 4. FinishOrder
 
-O resultado esperado é:
+A Lambda `finish-order` finaliza o processamento e retorna o status do pedido.
 
-```
-Teste executado com sucesso!
-```
+Exemplo:
 
-## Funcionamento da Lambda
-
-A função `lambda_handler`, localizada no arquivo `lambda_function.py`, é responsável por processar os eventos recebidos do Amazon SNS.
-
-Para cada registro recebido, a função:
-
-1. Obtém os dados do evento SNS.
-2. Extrai a mensagem recebida.
-3. Identifica o ARN do tópico de origem.
-4. Registra a mensagem no Amazon CloudWatch Logs.
-5. Registra o tópico de origem no Amazon CloudWatch Logs.
-6. Retorna uma mensagem indicando que o evento foi processado com sucesso.
-
-## Teste na AWS
-
-Na AWS foi criado o tópico Amazon SNS:
-
-`orders`
-
-A função Lambda utilizada no projeto é:
-
-`checkpoint2-sns-orders`
-
-O tópico SNS foi configurado para possuir uma assinatura do tipo Lambda apontando para a função.
-
-A assinatura possui o seguinte endpoint:
-
-`arn:aws:lambda:us-east-1:896328389669:function:checkpoint2-sns-orders`
-
-Uma mensagem foi publicada no tópico SNS utilizando o AWS CLI:
-
-```bash
-aws sns publish \
-  --topic-arn arn:aws:sns:us-east-1:896328389669:orders \
-  --message "TESTE CHECKPOINT 2 - SNS PARA LAMBDA"
+```json
+{
+  "order_id": "ORDER-001",
+  "status": "SUCCESS",
+  "processed": true,
+  "duplicate": false,
+  "message": "Pedido ORDER-001 finalizado com sucesso."
+}
 ```
 
-A publicação retornou um `MessageId`, confirmando que a mensagem foi aceita pelo Amazon SNS.
+## Orquestração com AWS Step Functions
 
-A execução da Lambda foi posteriormente confirmada por meio das métricas do Amazon CloudWatch.
+O AWS Step Functions é responsável por controlar a ordem de execução das funções:
 
-## Evidência do Processamento
-
-Após a publicação da mensagem no SNS, a métrica de invocações da AWS Lambda registrou a execução da função.
-
-Também foi possível verificar nos logs do Amazon CloudWatch:
-
-```
-Mensagem recebida do SNS: TESTE CHECKPOINT 2 - SNS PARA LAMBDA
-```
-
-E o tópico de origem:
-
-```
-Tópico de origem: arn:aws:sns:us-east-1:896328389669:orders
+```text
+ValidateOrder
+      |
+      v
+ProcessOrder
+      |
+      v
+FinishOrder
+      |
+      v
+OrderCompleted
 ```
 
-Isso comprova que a mensagem publicada no Amazon SNS foi recebida e processada pela função AWS Lambda.
+Cada etapa recebe a saída da etapa anterior, permitindo que o processamento seja realizado de forma organizada e controlada.
 
-O fluxo final validado foi:
+Em caso de erro, o workflow utiliza `Catch` para direcionar a execução para o fluxo de tratamento de falhas.
 
+## Retry
+
+As tarefas Lambda do Step Functions possuem política de retry para erros transitórios da infraestrutura AWS.
+
+São considerados:
+
+* `Lambda.ServiceException`
+* `Lambda.AWSLambdaException`
+* `Lambda.SdkClientException`
+
+Configuração utilizada:
+
+```text
+IntervalSeconds: 2
+MaxAttempts: 3
+BackoffRate: 2
 ```
-Amazon SNS
-     |
-     v
-AWS Lambda
-     |
-     v
-Amazon CloudWatch Logs
+
+Erros de validação, como um valor negativo para `amount`, não são tratados como erros transitórios e seguem diretamente para o fluxo de falha.
+
+## Dead-Letter Queue
+
+O workflow possui tratamento de falhas utilizando Amazon SQS.
+
+Quando uma tarefa falha e não consegue ser concluída após as tentativas configuradas, o `Catch` direciona a execução para a etapa `SendToDLQ`.
+
+```text
+Catch
+  |
+  v
+SendToDLQ
+  |
+  v
+orders-dlq
+  |
+  v
+OrderFailed
 ```
 
-## IAM
+A mensagem enviada para a DLQ contém os dados do pedido e as informações relacionadas ao erro.
 
-Foi criada uma IAM Role para permitir a execução da função Lambda.
+## Idempotência
 
-A role recebeu a política:
+A idempotência é implementada na Lambda `process-order` utilizando o Amazon DynamoDB.
 
-`AWSLambdaBasicExecutionRole`
+Quando um pedido é processado pela primeira vez, seu `order_id` é armazenado na tabela.
 
-Essa política permite que a função Lambda envie seus logs para o Amazon CloudWatch Logs.
+Quando o mesmo pedido é enviado novamente, o sistema identifica que o `order_id` já existe e evita um novo processamento.
 
-Também foi configurada uma permissão específica permitindo que o Amazon SNS invoque a função Lambda.
+Exemplo:
 
-A permissão de invocação utiliza o serviço:
+```text
+Primeira execução:
+ORDER-003
+processed = true
+duplicate = false
 
-`sns.amazonaws.com`
+Segunda execução:
+ORDER-003
+processed = false
+duplicate = true
+```
 
-e está restrita ao tópico SNS utilizado pelo projeto.
-
-## Serviços AWS Utilizados
-
-### Amazon SNS
-
-Responsável por receber e publicar as mensagens do sistema.
-
-### AWS Lambda
-
-Responsável por processar automaticamente os eventos recebidos do Amazon SNS.
-
-### Amazon CloudWatch Logs
-
-Responsável por armazenar os registros gerados durante a execução da função Lambda.
-
-### AWS IAM
-
-Responsável pelo controle de permissões e pela IAM Role utilizada pela função Lambda.
-
-### AWS CloudShell
-
-Utilizado como ambiente de terminal para executar comandos AWS CLI, realizar testes e administrar os recursos utilizados no projeto.
+Dessa forma, o mesmo pedido não é processado novamente.
 
 ## Segurança
 
-O projeto segue boas práticas de segurança.
+O projeto não utiliza chaves de acesso AWS, arquivos de credenciais ou secrets no código-fonte.
 
-O repositório público do GitHub não contém:
+As permissões são controladas através de **AWS IAM Roles** específicas para cada componente.
 
-- Chaves de acesso da AWS
-- Senhas
-- Tokens
-- Credenciais
-- Arquivos JSON contendo credenciais
-- Informações secretas
+As permissões seguem o princípio do menor privilégio, permitindo somente as ações necessárias para cada serviço.
 
-As credenciais utilizadas para acessar os serviços da AWS não fazem parte do código-fonte versionado no GitHub.
+Exemplos:
 
-## Repositório
+* Lambda `process-order`: acesso ao DynamoDB necessário para idempotência.
+* Lambda `start-order`: permissão para iniciar a execução do Step Functions.
+* Step Functions: permissão para executar as Lambdas e enviar mensagens para a SQS.
 
-O código-fonte do projeto está disponível no GitHub:
+A URL pública da Function URL não é armazenada neste repositório.
 
-https://github.com/rafaella-machado/cloud-serverless-checkpoint2
+## Pré-requisitos
 
-O repositório contém o código-fonte, os testes, o arquivo `requirements.txt`, o `.gitignore` e este README com as instruções de execução e explicação da arquitetura.
+* Conta AWS
+* AWS CLI configurado
+* Python 3.12+
+* Git
+* pytest
 
-## Conclusão
+## Execução dos testes locais
 
-O Checkpoint 2 demonstra uma arquitetura serverless orientada a eventos utilizando Amazon SNS, AWS Lambda e Amazon CloudWatch Logs.
+Clone o repositório:
 
-A solução permite desacoplar o produtor do evento do processamento, fazendo com que uma mensagem publicada no Amazon SNS seja automaticamente encaminhada para a função Lambda.
+```bash
+git clone https://github.com/rafaella-machado/cloud-serverless-checkpoint3.git
+cd cloud-serverless-checkpoint3
+```
 
-Dessa forma, a aplicação utiliza um modelo Event-Driven, no qual o processamento ocorre automaticamente em resposta à publicação de novos eventos.
+Instale as dependências:
 
-A implementação foi testada na AWS e teve seu funcionamento confirmado por meio da execução da Lambda e dos registros gerados no Amazon CloudWatch Logs.Dessa forma, a aplicação utiliza um modelo Event-Driven, no qual o processamento ocorre automaticamente em resposta à publicação de novos eventos.
+```bash
+pip install -r requirements.txt
+```
+
+Execute os testes:
+
+```bash
+pytest -q
+```
+
+Os testes verificam:
+
+* validação de pedidos;
+* rejeição de dados inválidos;
+* finalização de pedidos;
+* tratamento de pedidos duplicados;
+* estrutura e configurações principais do workflow.
+
+## Testes realizados na AWS
+
+Além dos testes unitários locais, o fluxo foi validado diretamente na AWS.
+
+### Execução normal
+
+Foi enviado o seguinte pedido:
+
+```json
+{
+  "order_id": "ORDER-003",
+  "customer": "Rafaella",
+  "amount": 150
+}
+```
+
+Resultado:
+
+```text
+SUCCEEDED
+```
+
+A execução percorreu corretamente as etapas:
+
+```text
+ValidateOrder
+      ↓
+ProcessOrder
+      ↓
+FinishOrder
+      ↓
+OrderCompleted
+```
+
+### Teste de idempotência
+
+O mesmo pedido `ORDER-003` foi enviado novamente.
+
+Resultado:
+
+```json
+{
+  "processed": false,
+  "duplicate": true
+}
+```
+
+A execução foi concluída com sucesso sem realizar o processamento novamente.
+
+### Teste da Dead-Letter Queue
+
+Foi enviado um pedido inválido:
+
+```json
+{
+  "order_id": "ORDER-004",
+  "customer": "Rafaella",
+  "amount": -10
+}
+```
+
+O workflow terminou com:
+
+```text
+FAILED
+```
+
+A mensagem contendo os dados do pedido e o erro de validação foi enviada para a fila:
+
+```text
+orders-dlq
+```
+
+### Teste da Function URL
+
+A entrada HTTP foi validada utilizando a Function URL da Lambda `start-order`.
+
+O endpoint recebeu o pedido e iniciou corretamente uma execução do AWS Step Functions.
+
+A URL da Function URL não é publicada neste README. Ela deve ser informada separadamente no campo de comentários/texto da entrega.
+
+## Recursos AWS utilizados
+
+Região:
+
+```text
+us-east-1
+```
+
+### AWS Lambda
+
+* `start-order`
+* `validate-order`
+* `process-order`
+* `finish-order`
+
+### AWS Step Functions
+
+* `order-processing-workflow`
+
+### Amazon DynamoDB
+
+* `orders-idempotency`
+
+### Amazon SQS
+
+* `orders-dlq`
+
+### AWS IAM
+
+Roles específicas para:
+
+* Lambda `start-order`
+* Lambda `validate-order`
+* Lambda `process-order`
+* Lambda `finish-order`
+* AWS Step Functions
+
+## Resultado
+
+O projeto implementa uma arquitetura serverless orquestrada para processamento de pedidos, contemplando os principais requisitos do Checkpoint 3:
+
+* **Orquestração** através do AWS Step Functions;
+* **Funções serverless** utilizando AWS Lambda;
+* **Idempotência** utilizando Amazon DynamoDB;
+* **Retry** para erros transitórios;
+* **Tratamento de falhas** utilizando `Catch`;
+* **Dead-Letter Queue** utilizando Amazon SQS;
+* **Controle de acesso** utilizando AWS IAM;
+* **Entrada HTTP** através de Lambda Function URL;
+* **Testes locais** utilizando pytest.
+
+## Autor
+
+Rafaella Machado
