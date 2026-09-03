@@ -1,8 +1,27 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# Virtual environments
 .venv/
 venv/
-.env
-*.json
+env/
+
+# AWS / local test outputs
 *.zip
-.aws/
+response.json
+finish-response.json
+start-response.json
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
